@@ -1,0 +1,50 @@
+name: Deploy Website to EC2
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Deploy CloudFormation Stack
+        run: |
+          aws cloudformation deploy \
+            --template-file cloudformation/ec2-webserver.yaml \
+            --stack-name ec2-website \
+            --no-fail-on-empty-changeset  
+
+      - name: Get Public IP
+        run: |
+          IP=$(aws cloudformation describe-stacks \
+            --stack-name ec2-website \
+            --query "Stacks[0].Outputs[?OutputKey=='PublicIp'].OutputValue" \
+            --output text)
+          echo "IP=$IP" >> "$GITHUB_ENV"
+
+      - name: Set Up SSH Key
+        run: |
+          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > key.pem
+          chmod 600 key.pem
+
+      - name: Copy Website to Server
+        run: |
+          ssh -o StrictHostKeyChecking=no -i key.pem ec2-user@$IP "mkdir -p ~/website"
+          scp -o StrictHostKeyChecking=no -i key.pem -r website/* ec2-user@$IP:~/website/
+          ssh -o StrictHostKeyChecking=no -i key.pem ec2-user@$IP "sudo cp -r ~/website/* /var/www/html/"
+          
+      - name: Show Website URL
+        run: echo "http://$IP"
